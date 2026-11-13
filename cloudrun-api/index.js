@@ -1628,9 +1628,6 @@ async function handleRequest_(req, res) {
       });
     }
 
-      return res.json(out);
-    }
-
     // Fetch TEM/card data.
     if (action === "fetch" || action === "fetchTem") {
       const out = await submitStepFetch_(sheets, sid, {
