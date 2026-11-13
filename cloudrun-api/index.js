@@ -26,7 +26,10 @@ const CFG = {
   TZ: "Asia/Ho_Chi_Minh",
   DATE_FMT: "dd/MM/yyyy",
 
-  VERSION: "CLOUD_RUN_SCAN_API_V1"
+  SCAN_MAX_ROWS: 5000,
+  LAYOUT_CACHE_MS: 300000,
+
+  VERSION: "CLOUD_RUN_SCAN_API_V2"
 };
 
 const STEP_LABEL = {
@@ -59,6 +62,7 @@ app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization");
+  res.setHeader("Access-Control-Max-Age", "600");
   if (req.method === "OPTIONS") return res.status(204).send("");
   next();
 });
@@ -159,7 +163,7 @@ function parseProdKey_(raw) {
   const s = clean_(raw);
   if (!s) return { pxkId: "", prodKey: "" };
 
-  const pos = s.indexOf("|");
+  const pos = s.indexOf("~");
   if (pos === -1) {
     return { pxkId: "", prodKey: s };
   }
@@ -256,15 +260,18 @@ function parseItems_(raw) {
 // =====================================================
 // GOOGLE SHEETS CLIENT
 // =====================================================
-async function getSheetsClient_() {
-  const auth = new google.auth.GoogleAuth({
-    scopes: [
-      "https://www.googleapis.com/auth/spreadsheets",
-      "https://www.googleapis.com/auth/drive.metadata.readonly"
-    ]
-  });
+// Reuse authentication and Sheets client within each Cloud Run instance.
+const sheetsAuth_ = new google.auth.GoogleAuth({
+  scopes: ["https://www.googleapis.com/auth/spreadsheets"]
+});
 
-  return google.sheets({ version: "v4", auth });
+const sheetsClient_ = google.sheets({
+  version: "v4",
+  auth: sheetsAuth_
+});
+
+async function getSheetsClient_() {
+  return sheetsClient_;
 }
 
 function qSheet_(name) {
@@ -308,6 +315,136 @@ async function readRange_(sheets, sid, range) {
 
 async function readPxkRows_(sheets, sid) {
   return readRange_(sheets, sid, `${qSheet_(CFG.SHEET_PXK)}!A1:ZZ5000`);
+}
+
+// =====================================================
+// LIGHTWEIGHT PXK READS — direct scanner path only
+// =====================================================
+const pxkLayoutCache_ = new Map();
+const commitLocks_ = new Map();
+
+async function getPxkLayout_(sheets, sid) {
+  const cached = pxkLayoutCache_.get(sid);
+
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.layout;
+  }
+
+  // Discover the header using only column A.
+  const a = await readRange_(
+    sheets,
+    sid,
+    `${qSheet_(CFG.SHEET_PXK)}!A1:A${CFG.SCAN_MAX_ROWS}`
+  );
+
+  const headerRow0 = a.findIndex(
+    row => norm_(row?.[0]) === norm_(CFG.PK_HEADER)
+  );
+
+  if (headerRow0 < 0) return null;
+
+  // Read only the actual header row.
+  const headerRows = await readRange_(
+    sheets,
+    sid,
+    `${qSheet_(CFG.SHEET_PXK)}!A${headerRow0 + 1}:ZZ${headerRow0 + 1}`
+  );
+
+  const header = (headerRows[0] || []).map(clean_);
+
+  const layout = {
+    headerRow0,
+    header,
+    hMap: headerMap0_(header)
+  };
+
+  pxkLayoutCache_.set(sid, {
+    layout,
+    expiresAt: Date.now() + CFG.LAYOUT_CACHE_MS
+  });
+
+  return layout;
+}
+
+async function readPxkScanRows_(sheets, sid, layout, stepCol0) {
+  const nameCol0 = findHeader0_(
+    layout.hMap,
+    [CFG.PXK_H_TENSP, "Ten Sp"]
+  );
+
+  if (nameCol0 < 0) return null;
+
+  // Preserve stop-marker detection from the original PXK logic.
+  const ranges = [
+    `${qSheet_(CFG.SHEET_PXK)}!A1:J${CFG.SCAN_MAX_ROWS}`,
+    ...[nameCol0, stepCol0].map(c => {
+      const letter = colLetter_(c + 1);
+      return `${qSheet_(CFG.SHEET_PXK)}!${letter}1:${letter}${CFG.SCAN_MAX_ROWS}`;
+    })
+  ];
+
+  // One Sheets batchGet, no DOT/TEM/QUEUE.
+  const result = await sheets.spreadsheets.values.batchGet({
+    spreadsheetId: sid,
+    ranges,
+    valueRenderOption: "FORMATTED_VALUE"
+  });
+
+  const parts = result.data.valueRanges || [];
+  const a = parts[0]?.values || [];
+  const names = parts[1]?.values || [];
+  const stages = parts[2]?.values || [];
+
+  const count = Math.max(
+    a.length,
+    names.length,
+    stages.length
+  );
+
+  const rows = Array.from({ length: count }, (_, r) => {
+    const row = (a[r] || []).map(clean_);
+
+    row[0] = clean_(a[r]?.[0]);
+    row[nameCol0] = clean_(names[r]?.[0]);
+    row[stepCol0] = clean_(stages[r]?.[0]);
+
+    return row;
+  });
+
+  const actualHeader = {
+    key: clean_(a[layout.headerRow0]?.[0]),
+    name: clean_(names[layout.headerRow0]?.[0]),
+    step: clean_(stages[layout.headerRow0]?.[0])
+  };
+
+  rows[layout.headerRow0] = layout.header;
+
+  return { rows, actualHeader };
+}
+
+// Serialize identical scans within one Cloud Run instance.
+async function withCommitLock_(key, task) {
+  const previous = commitLocks_.get(key) || Promise.resolve();
+
+  let release;
+
+  const current = new Promise(resolve => {
+    release = resolve;
+  });
+
+  commitLocks_.set(key, current);
+
+  await previous;
+
+  try {
+    return await task();
+  } finally {
+    release();
+
+    if (commitLocks_.get(key) === current) {
+      commitLocks_.delete(key);
+    }
+  }
 }
 
 async function updateCell_(sheets, sid, sheetName, row1, col1, value) {
@@ -547,23 +684,20 @@ function getPxkOpenStatusFromRows_(rows, pxkId) {
 // STEPS
 // =====================================================
 async function getAvailableSteps_(sheets, sid) {
-  const rows = await readPxkRows_(sheets, sid);
-  const found = findPxkHeader_(rows);
-  if (!found) return [];
+  const layout = await getPxkLayout_(sheets, sid);
+  if (!layout) return [];
 
-  const steps = [];
-
-  for (const step of CFG.STEPS) {
-    const col0 = findHeader0_(found.hMap, [`${CFG.STEP_PREFIX}${step}`]);
-    if (col0 >= 0) {
-      steps.push({
-        id: step,
-        label: STEP_LABEL[step] || step
-      });
-    }
-  }
-
-  return steps;
+  return CFG.STEPS
+    .filter(step =>
+      findHeader0_(
+        layout.hMap,
+        [`${CFG.STEP_PREFIX}${step}`]
+      ) >= 0
+    )
+    .map(step => ({
+      id: step,
+      label: STEP_LABEL[step] || step
+    }));
 }
 
 // =====================================================
@@ -640,6 +774,195 @@ async function submitStepCommit_(sheets, sid, payload) {
     status: "DONE",
     msg: `Đã báo cáo: ${stepLabel}`,
     doneBadges: getDoneBadges_(updatedRow, st.hMap)
+  };
+}
+
+// =====================================================
+// DIRECT SCANNER COMMIT
+// =====================================================
+async function submitStepCommitFast_(sheets, sid, payload) {
+  const prodKey = clean_(payload?.prodKey);
+  const step = upper_(payload?.step);
+  const workerInfo = clean_(payload?.workerInfo);
+  const pxk = normalizePxkId_(payload?.pxk);
+  const stepLabel = STEP_LABEL[step] || step;
+
+  if (!prodKey || !step || !workerInfo || !pxk) {
+    return {
+      ok: false,
+      code: "BAD_INPUT",
+      msg: "Missing fields"
+    };
+  }
+
+  if (!CFG.STEPS.includes(step)) {
+    return {
+      ok: false,
+      code: "BAD_STEP",
+      msg: "Công đoạn không hợp lệ"
+    };
+  }
+
+  const parsed = parseProdKey_(prodKey);
+
+  if (
+    parsed.pxkId &&
+    normalizePxkId_(parsed.pxkId) !== pxk
+  ) {
+    return {
+      ok: false,
+      code: "PXK_MISMATCH",
+      msg: "Mã TEM không thuộc PXK đang mở"
+    };
+  }
+
+  const layout = await getPxkLayout_(sheets, sid);
+
+  if (!layout) {
+    return {
+      ok: false,
+      code: "PXK_HEADER_NOT_FOUND",
+      msg: "Không thấy header prodKey"
+    };
+  }
+
+  const stepCol0 = findHeader0_(
+    layout.hMap,
+    [`${CFG.STEP_PREFIX}${step}`]
+  );
+
+  if (stepCol0 < 0) {
+    return {
+      ok: false,
+      code: "NOT_CONFIG",
+      msg: `Công đoạn chưa được cấu hình: ${stepLabel}`
+    };
+  }
+
+  const scan = await readPxkScanRows_(
+    sheets,
+    sid,
+    layout,
+    stepCol0
+  );
+
+  if (!scan) {
+    return {
+      ok: false,
+      code: "PXK_NAME_COL_MISSING",
+      msg: "PXK thiếu cột Tên Sp"
+    };
+  }
+
+  const { rows, actualHeader } = scan;
+
+  const nameCol0 = findHeader0_(
+    layout.hMap,
+    [CFG.PXK_H_TENSP, "Ten Sp"]
+  );
+
+  // Detect changes to cached column positions.
+  if (
+    norm_(actualHeader.key) !== norm_(CFG.PK_HEADER) ||
+    norm_(actualHeader.name) !== norm_(layout.header[nameCol0]) ||
+    norm_(actualHeader.step) !== norm_(layout.header[stepCol0])
+  ) {
+    pxkLayoutCache_.delete(sid);
+
+    return {
+      ok: false,
+      code: "PXK_LAYOUT_CHANGED",
+      msg: "Cấu trúc PXK đã đổi. Hãy quét lại."
+    };
+  }
+
+  const currentPxk = normalizePxkId_(
+    getPxkIdFromRows_(rows)
+  );
+
+  if (!currentPxk) {
+    return {
+      ok: false,
+      code: "PXK_ID_MISSING",
+      msg: "PXK_ID chưa được tạo ở A6"
+    };
+  }
+
+  if (currentPxk !== pxk) {
+    return {
+      ok: false,
+      code: "PXK_MISMATCH",
+      msg: "PXK đang mở không khớp file hiện tại"
+    };
+  }
+
+  const found = getPxkRowStatusFromRows_(
+    rows,
+    prodKey
+  );
+
+  if (!found) {
+    return {
+      ok: false,
+      code: "NOT_FOUND",
+      msg: "Mã TEM không tồn tại trong PXK"
+    };
+  }
+
+  // Reject duplicate product keys.
+  const end0 = findPxkDataEndRow0_(
+    rows,
+    layout.headerRow0,
+    nameCol0
+  );
+
+  let matches = 0;
+
+  for (
+    let r = layout.headerRow0 + 1;
+    r <= end0;
+    r++
+  ) {
+    if (clean_(rows[r]?.[0]) === prodKey) {
+      matches++;
+    }
+
+    if (matches > 1) {
+      return {
+        ok: false,
+        code: "DUPLICATE_KEY",
+        msg: "prodKey bị trùng trong PXK. Báo văn phòng."
+      };
+    }
+  }
+
+  // Already completed: do not write again.
+  if (clean_(found.row[stepCol0])) {
+    return {
+      ok: false,
+      code: "SKIP",
+      status: "SKIP",
+      msg: `Công đoạn đã được ghi nhận: ${stepLabel}`
+    };
+  }
+
+  // Write only the required date cell.
+  const today = todayVN_();
+
+  await updateCell_(
+    sheets,
+    sid,
+    CFG.SHEET_PXK,
+    found.row1,
+    stepCol0 + 1,
+    today
+  );
+
+  return {
+    ok: true,
+    code: "OK",
+    status: "DONE",
+    msg: `Đã báo cáo: ${stepLabel}`
   };
 }
 
@@ -1171,8 +1494,77 @@ async function handleRequest_(req, res) {
         });
       }
 
-      const rows = await readPxkRows_(sheets, sid);
-      const st = getPxkOpenStatusFromRows_(rows, pxk);
+      const layout = await getPxkLayout_(sheets, sid);
+      let st;
+
+      if (!layout) {
+        st = {
+          ok: false,
+          code: "PXK_HEADER_NOT_FOUND",
+          msg: "Không thấy header prodKey",
+          found: 0,
+          openCount: 0
+        };
+      } else {
+        const khoCol0 = findHeader0_(
+          layout.hMap,
+          [`${CFG.STEP_PREFIX}KHO`]
+        );
+
+        if (khoCol0 < 0) {
+          st = {
+            ok: false,
+            code: "KHO_COL_MISSING",
+            msg: "PXK thiếu Ngay_KHO",
+            found: 0,
+            openCount: 0
+          };
+        } else {
+          const scan = await readPxkScanRows_(
+            sheets,
+            sid,
+            layout,
+            khoCol0
+          );
+
+          if (!scan) {
+            st = {
+              ok: false,
+              code: "PXK_NAME_COL_MISSING",
+              msg: "PXK thiếu Tên Sp",
+              found: 0,
+              openCount: 0
+            };
+          } else {
+            const nameCol0 = findHeader0_(
+              layout.hMap,
+              [CFG.PXK_H_TENSP, "Ten Sp"]
+            );
+
+            const h = scan.actualHeader;
+
+            const changed =
+              norm_(h.key) !== norm_(CFG.PK_HEADER) ||
+              norm_(h.name) !== norm_(layout.header[nameCol0]) ||
+              norm_(h.step) !== norm_(layout.header[khoCol0]);
+
+            if (changed) {
+              pxkLayoutCache_.delete(sid);
+            }
+
+            st = changed
+              ? {
+                  ok: false,
+                  code: "PXK_LAYOUT_CHANGED",
+                  msg: "Cấu trúc PXK đã đổi. Hãy tải lại.",
+                  found: 0,
+                  openCount: 0
+                }
+              : getPxkOpenStatusFromRows_(scan.rows, pxk);
+          }
+        }
+      }
+
       const meta = await getSpreadsheetMeta_(sheets, sid);
 
       return res.json({
@@ -1201,23 +1593,40 @@ async function handleRequest_(req, res) {
       return res.json(out);
     }
     
-    // Keep QUEUE logic but makes UI receive DONE/SKIP faster
+    // Direct scanner: one POST, final OK/SKIP/ERROR.
     if (action === "commit") {
-      const out = await enqueueCommit_(sheets, sid, {
-        prodKey: p.prodKey,
-        step: p.step,
-        workerInfo: p.workerInfo,
-        pxk: p.pxk
-      });
-
-      if (out && out.ok) {
-        try {
-          await processQueueBatch_(sheets, sid, 5);
-        } catch (e) {
-          // Do not fail the scan response if immediate queue processing has an issue.
-          // queueStatusBulk will process again on next poll.
-        }
+      if (req.method !== "POST") {
+        return jsonFail_(res, {
+          code: "METHOD_NOT_ALLOWED",
+          msg: "Use POST"
+        }, 405);
       }
+
+      const lockKey = JSON.stringify([
+        sid,
+        clean_(p.prodKey),
+        upper_(p.step)
+      ]);
+
+      const out = await withCommitLock_(lockKey, () =>
+        submitStepCommitFast_(sheets, sid, {
+          prodKey: p.prodKey,
+          step: p.step,
+          workerInfo: p.workerInfo,
+          pxk: p.pxk
+        })
+      );
+
+      const status =
+        out.code === "OK" ? "OK" :
+        out.code === "SKIP" ? "SKIP" :
+        "ERROR";
+
+      return res.json({
+        ...out,
+        status
+      });
+    }
 
       return res.json(out);
     }
@@ -1281,11 +1690,26 @@ async function handleRequest_(req, res) {
     }, 404);
 
   } catch (err) {
+    const upstreamStatus = Number(
+      err?.response?.status || err?.status || err?.code
+    );
+
+    const httpStatus =
+      Number.isInteger(upstreamStatus) &&
+      upstreamStatus >= 400 &&
+      upstreamStatus <= 599
+        ? upstreamStatus
+        : 500;
+
     return jsonFail_(res, {
-      code: err.code || "SERVER_ERROR",
-      error: err.message,
-      msg: err.message
-    }, 500);
+      code: httpStatus === 429
+        ? "RATE_LIMIT"
+        : "SERVER_ERROR",
+      status: "ERROR",
+      msg: httpStatus === 429
+        ? "Google Sheets đang quá tải. Hãy thử lại sau."
+        : (err.message || "Lỗi máy chủ")
+    }, httpStatus);
   }
 }
 
