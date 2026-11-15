@@ -908,18 +908,15 @@ function renderDetails(card, detail, key) {
 
     if (!data || !data.pk) {
       counts.ERROR++;
-
-      newCard(
-        "ERROR",
-        String(raw || "").slice(0,80),
-        "QR không chứa mã sản phẩm hợp lệ"
+    
+      const card = newCard(
+        "❌ ERROR",
+        "",
+        "Mã QR hoặc mã SP không hợp lệ"
       );
-
-      setStatus(
-        "ERROR",
-        "❌ ERROR — QR không hợp lệ"
-      );
-
+    
+      card.querySelector(".temBody")?.remove();
+    
       navigator.vibrate?.(120);
       return focusScanner();
     }
