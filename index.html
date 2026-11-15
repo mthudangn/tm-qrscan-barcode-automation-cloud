@@ -222,6 +222,28 @@ button:active:not(:disabled){transform:scale(.975)}
 .temLine.product{
   font-weight:950;
 }
+
+.temSection + .temSection{
+  border-top:1px solid rgba(96,127,121,.18);
+  margin-top:9px;
+  padding-top:9px;
+}
+
+.temStt{
+  font-weight:400;
+  color:#5b6771;
+}
+
+.temStt strong{
+  font-weight:950;
+  color:#223344;
+}
+
+.temKhgh{
+  margin-top:6px;
+  font-size:11px;
+  color:#5b6771;
+}
 .temFooter{
   border-top:1px solid rgba(96,127,121,.16);
   margin-top:8px;
@@ -690,58 +712,87 @@ button:active:not(:disabled){transform:scale(.975)}
   return card;
 }
 
+
 function renderDetails(card, detail, key) {
   if (!card || !card.isConnected) return;
 
   const body = card.querySelector(".temBody");
   const note = card.querySelector(".temNote");
+  if (!body) return;
 
   body.replaceChildren();
-
-  if (note) {
-    note.textContent = "";
-  }
+  if (note) note.textContent = "";
 
   const tem = detail?.temPrint || {};
-  const lines = [];
+  const footer = tem.footer || {};
 
-  for (const field of ["l1","l2","l3","l4","l5"]) {
-    const value = String(tem[field] || "").trim();
-    if (value) {
-      lines.push(...value.split(/\r?\n/).map(x => x.trim()).filter(Boolean));
+  // STT đặt cạnh OK / SKIP, chỉ số được in đậm.
+  const tag = card.querySelector(".temHead .tag");
+  if (tag) {
+    tag.querySelector(".temStt")?.remove();
+
+    if (footer.stt) {
+      const stt = document.createElement("span");
+      stt.className = "temStt";
+      stt.append(document.createTextNode(" · STT: "));
+
+      const number = document.createElement("strong");
+      number.textContent = String(footer.stt);
+      stt.append(number);
+      tag.append(stt);
     }
   }
 
-  if (!lines.length) {
+  function addSection(fields, boldProduct = false, khgh = false) {
+    const section = document.createElement("div");
+    section.className = "temSection";
+
+    for (const field of fields) {
+      const value = String(tem[field] || "").trim();
+      if (!value) continue;
+
+      for (const line of value.split(/\r?\n/)) {
+        if (!line.trim()) continue;
+
+        const div = document.createElement("div");
+        div.className = "temLine";
+
+        if (boldProduct && card.classList.contains("ok")) {
+          div.classList.add("product");
+        }
+
+        div.textContent = line.trim();
+        section.append(div);
+      }
+    }
+
+    if (khgh && footer.khgh) {
+      const div = document.createElement("div");
+      div.className = "temKhgh";
+      div.textContent = "KHGH: " + footer.khgh;
+      section.append(div);
+    }
+
+    if (section.childNodes.length) body.append(section);
+  }
+
+  // Khoang 1: thông tin khách và giấy
+  addSection(["l1", "l2"]);
+
+  // Khoang 2: kích thước
+  addSection(["l3"]);
+
+  // Khoang 3: tên SP
+  addSection(["l4"], true);
+
+  // Khoang 4: D/K và KHGH
+  addSection(["l5"], false, true);
+
+  if (!body.childNodes.length) {
     const fallback = document.createElement("div");
     fallback.className = "temLine";
     fallback.textContent = compactKey(key);
     body.append(fallback);
-  } else {
-    for (const line of lines) {
-      const div = document.createElement("div");
-      div.className = "temLine";
-
-      if (/SK\s+SHOES\s+BOX/i.test(line)) {
-        div.classList.add("product");
-      }
-
-      div.textContent = line;
-      body.append(div);
-    }
-  }
-
-  const footer = tem.footer || {};
-  const footerParts = [];
-
-  if (footer.khgh) footerParts.push("KHGH: " + footer.khgh);
-  if (footer.stt) footerParts.push("STT: " + footer.stt);
-
-  if (footerParts.length) {
-    const footerDiv = document.createElement("div");
-    footerDiv.className = "temFooter";
-    footerDiv.textContent = footerParts.join(" · ");
-    body.append(footerDiv);
   }
 
   const done = Array.isArray(detail?.doneBadges)
