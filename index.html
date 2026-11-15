@@ -148,31 +148,39 @@ button:active:not(:disabled){transform:scale(.975)}
 .columns{
   display:grid;
   grid-template-columns:minmax(0,1fr) minmax(0,1fr);
-  gap:9px;
+  gap:10px;
+  align-items:start;
 }
 .col{min-width:0}
 .colTitle{
   text-align:center;
-  font-weight:900;
-  font-size:13px;
-  margin-bottom:9px;
+  font-weight:950;
+  font-size:14px;
+  margin-bottom:10px;
 }
-.cards{display:grid;gap:9px;align-content:start}
+.cards{
+  display:grid;
+  gap:10px;
+  align-content:start;
+}
 .temCard{
   min-width:0;
-  border-radius:15px;
-  padding:10px;
-  border:1px solid transparent;
+  border-radius:16px;
+  padding:12px;
+  border:1px solid #dde4e8;
+  background:#fff;
   overflow-wrap:anywhere;
   animation:appear .22s ease-out;
+  box-shadow:0 1px 0 rgba(0,0,0,.02);
 }
 .temCard.ok{
-  background:var(--okBg);
-  border-color:#b7e8df;
+  background:#dff3eb;
+  border-color:#bfe5d7;
 }
-.temCard.skip,.temCard.err{
-  background:var(--otherBg);
-  border-color:#dee2e6;
+.temCard.skip,
+.temCard.err{
+  background:#f3f5f7;
+  border-color:#dde3e8;
 }
 @keyframes appear{
   from{opacity:0;transform:translateY(-6px)}
@@ -181,59 +189,81 @@ button:active:not(:disabled){transform:scale(.975)}
 .temHead{
   display:flex;
   justify-content:space-between;
-  gap:4px;
-  align-items:center;
+  align-items:flex-start;
+  gap:8px;
   font-weight:950;
   font-size:14px;
 }
+.temHead .tag{
+  line-height:1.2;
+}
 .temHead time{
-  color:#79838d;
+  color:#7a8693;
   font-size:10px;
-  font-weight:650;
+  font-weight:700;
   white-space:nowrap;
 }
 .temCard.ok .tag{color:#087f78}
 .temCard.skip .tag{color:#58616c}
 .temCard.err .tag{color:#c62828}
+
 .temBody{
-  border-top:1px solid #607f7928;
-  padding-top:7px;
-  margin-top:7px;
+  border-top:1px solid rgba(96,127,121,.16);
+  padding-top:8px;
+  margin-top:8px;
 }
 .temLine{
   font-size:12px;
-  line-height:1.45;
+  line-height:1.42;
   padding:2px 0;
   white-space:pre-wrap;
   overflow-wrap:anywhere;
 }
-.temLine.product{font-weight:950}
+.temLine.product{
+  font-weight:950;
+}
 .temFooter{
-  border-top:1px solid #607f7928;
-  margin-top:7px;
-  padding-top:7px;
-  color:#53606b;
+  border-top:1px solid rgba(96,127,121,.16);
+  margin-top:8px;
+  padding-top:8px;
+  color:#5b6771;
   font-size:11px;
+}
+.temStepsWrap{
+  border-top:1px solid rgba(96,127,121,.16);
+  margin-top:8px;
+  padding-top:8px;
+}
+.temMiniLabel{
+  font-size:10px;
+  font-weight:900;
+  color:#60707c;
+  margin-bottom:6px;
+  text-transform:uppercase;
+  letter-spacing:.02em;
 }
 .temSteps{
   display:flex;
   flex-wrap:wrap;
   gap:4px;
-  margin-top:8px;
 }
 .temSteps span{
-  padding:4px 6px;
-  border-radius:12px;
-  background:#ffffffaa;
-  border:1px solid #7bb5ad30;
+  padding:4px 7px;
+  border-radius:999px;
+  background:#ffffffc7;
+  border:1px solid #cfe5df;
   font-size:10px;
-  font-weight:850;
+  font-weight:900;
+  line-height:1.1;
 }
 .temNote{
   margin-top:8px;
-  color:#52606b;
+  color:#56636f;
   font-size:11px;
-  line-height:1.35;
+  line-height:1.4;
+}
+.temNote:empty{
+  display:none;
 }
 #toast{
   position:fixed;
@@ -605,78 +635,80 @@ button:active:not(:disabled){transform:scale(.975)}
   }
 
   function newCard(kind, key, message) {
-    const card = document.createElement("article");
-    card.className =
-      "temCard " + kind.toLowerCase();
+  const card = document.createElement("article");
+  card.className = "temCard " + kind.toLowerCase();
 
-    const head = document.createElement("div");
-    head.className = "temHead";
+  const head = document.createElement("div");
+  head.className = "temHead";
 
-    const label = document.createElement("span");
-    label.className = "tag";
-    label.textContent =
-      kind === "OK" ? "✅ OK" :
-      kind === "SKIP" ? "❌ SKIP" :
-      "❌ ERROR";
+  const label = document.createElement("span");
+  label.className = "tag";
+  label.textContent =
+    kind === "OK" ? "✅ OK" :
+    kind === "SKIP" ? "❌ SKIP" :
+    "❌ ERROR";
 
-    const time = document.createElement("time");
-    time.textContent = timeNow();
+  const time = document.createElement("time");
+  time.textContent = timeNow();
 
-    head.append(label, time);
+  head.append(label, time);
 
-    const body = document.createElement("div");
-    body.className = "temBody";
-    body.textContent = "Mã TEM: " + compactKey(key);
+  const body = document.createElement("div");
+  body.className = "temBody";
 
-    const note = document.createElement("div");
-    note.className = "temNote";
-    note.textContent = message || "";
+  const firstLine = document.createElement("div");
+  firstLine.className = "temLine";
+  firstLine.textContent = compactKey(key);
+  body.append(firstLine);
 
-    card.append(head, body, note);
+  const note = document.createElement("div");
+  note.className = "temNote";
+  note.textContent = message || "";
 
-    const list = kind === "OK"
-      ? $("okList")
-      : $("otherList");
+  card.append(head, body, note);
 
-    list.prepend(card);
+  const list = kind === "OK"
+    ? $("okList")
+    : $("otherList");
 
-    while (list.children.length > 20) {
-      list.lastElementChild.remove();
-    }
+  list.prepend(card);
 
-    updateCounts();
-    return card;
+  while (list.children.length > 20) {
+    list.lastElementChild.remove();
   }
 
-  function renderDetails(card, detail, key) {
-    if (!card.isConnected) return;
+  updateCounts();
+  return card;
+}
 
-    const body = card.querySelector(".temBody");
-    body.replaceChildren();
+function renderDetails(card, detail, key) {
+  if (!card || !card.isConnected) return;
 
-    const tem = detail?.temPrint || {};
+  const body = card.querySelector(".temBody");
+  const note = card.querySelector(".temNote");
 
-    let lines = [];
+  body.replaceChildren();
 
-    for (const field of [
-      "l1","l2","l3","l4","l5"
-    ]) {
-      const value = String(tem[field] || "").trim();
+  if (note) {
+    note.textContent = "";
+  }
 
-      if (value) {
-        lines.push(
-          ...value.split(/\r?\n/).filter(Boolean)
-        );
-      }
+  const tem = detail?.temPrint || {};
+  const lines = [];
+
+  for (const field of ["l1","l2","l3","l4","l5"]) {
+    const value = String(tem[field] || "").trim();
+    if (value) {
+      lines.push(...value.split(/\r?\n/).map(x => x.trim()).filter(Boolean));
     }
+  }
 
-    if (!lines.length) {
-      const div = document.createElement("div");
-      div.className = "temLine";
-      div.textContent = "Mã TEM: " + compactKey(key);
-      body.append(div);
-    }
-
+  if (!lines.length) {
+    const fallback = document.createElement("div");
+    fallback.className = "temLine";
+    fallback.textContent = compactKey(key);
+    body.append(fallback);
+  } else {
     for (const line of lines) {
       const div = document.createElement("div");
       div.className = "temLine";
@@ -688,56 +720,56 @@ button:active:not(:disabled){transform:scale(.975)}
       div.textContent = line;
       body.append(div);
     }
-
-    const footer = tem.footer || {};
-    const footerParts = [];
-
-    if (footer.khgh) {
-      footerParts.push("KHGH: " + footer.khgh);
-    }
-
-    if (footer.stt) {
-      footerParts.push("STT: " + footer.stt);
-    }
-
-    if (footerParts.length) {
-      const div = document.createElement("div");
-      div.className = "temFooter";
-      div.textContent = footerParts.join(" · ");
-      body.append(div);
-    }
-
-    const done = Array.isArray(detail?.doneBadges)
-      ? detail.doneBadges.slice()
-      : [];
-
-    if (done.length) {
-      done.sort((a,b) => {
-        function order(x) {
-          const value = String(x).toUpperCase();
-
-          const index = stepOrder.findIndex(id =>
-            value.includes(id)
-          );
-
-          return index < 0 ? 999 : index;
-        }
-
-        return order(a) - order(b);
-      });
-
-      const group = document.createElement("div");
-      group.className = "temSteps";
-
-      for (const item of done) {
-        const badge = document.createElement("span");
-        badge.textContent = String(item);
-        group.append(badge);
-      }
-
-      body.append(group);
-    }
   }
+
+  const footer = tem.footer || {};
+  const footerParts = [];
+
+  if (footer.khgh) footerParts.push("KHGH: " + footer.khgh);
+  if (footer.stt) footerParts.push("STT: " + footer.stt);
+
+  if (footerParts.length) {
+    const footerDiv = document.createElement("div");
+    footerDiv.className = "temFooter";
+    footerDiv.textContent = footerParts.join(" · ");
+    body.append(footerDiv);
+  }
+
+  const done = Array.isArray(detail?.doneBadges)
+    ? detail.doneBadges.slice()
+    : [];
+
+  if (done.length) {
+    done.sort((a, b) => {
+      const va = String(a).toUpperCase();
+      const vb = String(b).toUpperCase();
+
+      const ia = stepOrder.findIndex(id => va.includes(id));
+      const ib = stepOrder.findIndex(id => vb.includes(id));
+
+      return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib);
+    });
+
+    const wrap = document.createElement("div");
+    wrap.className = "temStepsWrap";
+
+    const label = document.createElement("div");
+    label.className = "temMiniLabel";
+    label.textContent = "Đã quét";
+
+    const group = document.createElement("div");
+    group.className = "temSteps";
+
+    for (const item of done) {
+      const badge = document.createElement("span");
+      badge.textContent = String(item);
+      group.append(badge);
+    }
+
+    wrap.append(label, group);
+    body.append(wrap);
+  }
+}
 
   async function getAPI(action, extras={}) {
     const url = new URL(apiBase + "/");
