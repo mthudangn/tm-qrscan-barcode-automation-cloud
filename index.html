@@ -382,13 +382,11 @@ button:active:not(:disabled){transform:scale(.975)}
              autocorrect="off"
              autocapitalize="off"
              spellcheck="false"
-             placeholder="QR nhận từ KAW"
+             placeholder="QR nhận từ scanner"
              disabled>
 
       <p class="hint">
-        KAW Bluetooth HID · Gửi Enter sau mỗi QR.
-        Trên iPhone dùng bàn phím English (US)
-        để tránh Telex sửa ký tự.
+        Trên điện thoại dùng bàn phím Tiếng Anh.
       </p>
     </div>
 
@@ -405,11 +403,9 @@ button:active:not(:disabled){transform:scale(.975)}
 
     <div class="columns">
       <div class="col">
-        <div class="colTitle">✅ OK</div>
         <div class="cards" id="okList"></div>
       </div>
       <div class="col">
-        <div class="colTitle">❌ SKIP / ERROR</div>
         <div class="cards" id="otherList"></div>
       </div>
     </div>
@@ -560,52 +556,64 @@ button:active:not(:disabled){transform:scale(.975)}
 
   function parseQR(raw) {
     const value = String(raw || "").trim();
-
+  
     if (!value) return null;
-
+  
+    let key = "";
+    let qrSid = "";
+    let qrPxk = "";
+  
+    // QR chứa URL mở trang GitHub
     if (/^https?:\/\//i.test(value)) {
       let url;
-
+  
       try {
         url = new URL(value);
       } catch (_) {
         return null;
       }
-
+  
+      // Chấp nhận cả đường dẫn GitHub cũ và mới.
       if (
-        url.origin !== "https://mthudangn.github.io" ||
-        !url.pathname.startsWith(
-          "/tm-qrscan-barcode-automation-cloud/"
-        )
+        url.protocol !== "https:" ||
+        url.hostname !== "mthudangn.github.io"
       ) {
         return null;
       }
-
-      return {
-        pk: String(
-          url.searchParams.get("pk") || ""
-        ).trim(),
-
-        sid: String(
-          url.searchParams.get("sid") || ""
-        ).trim(),
-
-        pxk: String(
-          url.searchParams.get("pxk") || ""
-        ).trim().toUpperCase()
-      };
+  
+      key = String(url.searchParams.get("pk") || "").trim();
+      qrSid = String(url.searchParams.get("sid") || "").trim();
+      qrPxk = String(url.searchParams.get("pxk") || "")
+        .trim().toUpperCase();
+  
+    } else {
+      // KAW có thể trả trực tiếp mã sản phẩm.
+      key = value;
     }
-
-    // Hỗ trợ máy KAW xuất trực tiếp prodKey.
-    if (value.split("~").length >= 3) {
-      return {
-        pk: value,
-        sid: "",
-        pxk: value.split("~")[0].toUpperCase()
-      };
+  
+    // Chuẩn hóa định dạng cũ | sang ~ của Cloud Run V2.
+    if (
+      key.includes("|") &&
+      !key.includes("~")
+    ) {
+      key = key.replace(/\|/g, "~");
     }
-
-    return null;
+  
+    const parts = key.split("~");
+  
+    if (
+      parts.length < 3 ||
+      parts.some(part => !part.trim()) ||
+      !/^[a-z0-9]+$/i.test(parts[0])
+    ) {
+      return null;
+    }
+  
+    return {
+      pk: key,
+      sid: qrSid,
+      pxk: qrPxk || parts[0].toUpperCase()
+    };
   }
 
   function compactKey(key) {
