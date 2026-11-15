@@ -29,7 +29,7 @@ const CFG = {
   SCAN_MAX_ROWS: 5000,
   LAYOUT_CACHE_MS: 300000,
 
-  VERSION: "CLOUD_RUN_SCAN_API_V2"
+  VERSION: "CLOUD_RUN_SCAN_API_V2" // Cloud Run Version 2
 };
 
 const STEP_LABEL = {
